@@ -921,3 +921,458 @@ class RadiusNeighborsClassifier(RadiusNeighborsMixin, ClassifierMixin, Neighbors
         tags = super().__sklearn_tags__()
         tags.classifier_tags.multi_label = True
         return tags
+
+
+class RandomKNeighborsClassifier(KNeighborsMixin, ClassifierMixin, NeighborsBase):
+    """Classifier implementing random k-nearest neighbors ensemble vote.
+
+    Random k-NN constructs an ensemble of k-NN classifiers, where each base
+    classifier uses a random subset of features. This approach reduces the
+    impact of noisy features and improves performance on high-dimensional data
+    by aggregating predictions through voting.
+
+    Read more in the :ref:`User Guide <classification>`.
+
+    Parameters
+    ----------
+    n_estimators : int, default=100
+        The number of base k-NN estimators in the ensemble. Each estimator
+        uses a random subset of features.
+
+    n_neighbors : int, default=5
+        Number of neighbors to use by default for :meth:`kneighbors` queries
+        in each base estimator.
+
+    n_features_per_subset : int or None, default=None
+        The number of features to randomly select for each base estimator.
+        If None, then ``n_features_per_subset=sqrt(n_features)``.
+
+    weights : {'uniform', 'distance'}, callable or None, default='uniform'
+        Weight function used in prediction. Possible values:
+
+        - 'uniform' : uniform weights. All points in each neighborhood
+          are weighted equally.
+        - 'distance' : weight points by the inverse of their distance.
+          In this case, closer neighbors of a query point will have a
+          greater influence than neighbors which are further away.
+        - [callable] : a user-defined function which accepts an
+          array of distances, and returns an array of the same shape
+          containing the weights.
+
+    ensemble_voting : {'hard', 'soft'}, default='hard'
+        Voting strategy for aggregating predictions from base estimators:
+
+        - 'hard' : use predicted class labels for majority voting.
+        - 'soft' : predict the class label based on the weighted sum of
+          predicted probabilities from each base estimator.
+
+    algorithm : {'auto', 'ball_tree', 'kd_tree', 'brute'}, default='auto'
+        Algorithm used to compute the nearest neighbors:
+
+        - 'ball_tree' will use :class:`BallTree`
+        - 'kd_tree' will use :class:`KDTree`
+        - 'brute' will use a brute-force search.
+        - 'auto' will attempt to decide the most appropriate algorithm
+          based on the values passed to :meth:`fit` method.
+
+        Note: fitting on sparse input will override the setting of
+        this parameter, using brute force.
+
+    leaf_size : int, default=30
+        Leaf size passed to BallTree or KDTree. This can affect the
+        speed of the construction and query, as well as the memory
+        required to store the tree. The optimal value depends on the
+        nature of the problem.
+
+    p : float, default=2
+        Power parameter for the Minkowski metric. When p = 1, this is
+        equivalent to using manhattan_distance (l1), and euclidean_distance
+        (l2) for p = 2. For arbitrary p, minkowski_distance (l_p) is used.
+        This parameter is expected to be positive.
+
+    metric : str or callable, default='minkowski'
+        Metric to use for distance computation. Default is "minkowski", which
+        results in the standard Euclidean distance when p = 2. See the
+        documentation of `scipy.spatial.distance
+        <https://docs.scipy.org/doc/scipy/reference/spatial.distance.html>`_ and
+        the metrics listed in
+        :class:`~sklearn.metrics.pairwise.distance_metrics` for valid metric
+        values.
+
+        If metric is a callable function, it takes two arrays representing 1D
+        vectors as inputs and must return one value indicating the distance
+        between those vectors. This works for Scipy's metrics, but is less
+        efficient than passing the metric name as a string.
+
+    metric_params : dict, default=None
+        Additional keyword arguments for the metric function.
+
+    n_jobs : int, default=None
+        The number of parallel jobs to run for neighbors search.
+        ``None`` means 1 unless in a :obj:`joblib.parallel_backend` context.
+        ``-1`` means using all processors. See :term:`Glossary <n_jobs>`
+        for more details.
+        Doesn't affect :meth:`fit` method.
+
+    random_state : int, RandomState instance or None, default=None
+        Controls the random sampling of features for each base estimator.
+        Pass an int for reproducible output across multiple function calls.
+        See :term:`Glossary <random_state>`.
+
+    Attributes
+    ----------
+    classes_ : array of shape (n_classes,)
+        Class labels known to the classifier.
+
+    effective_metric_ : str or callable
+        The distance metric used. It will be same as the `metric` parameter
+        or a synonym of it, e.g. 'euclidean' if the `metric` parameter set to
+        'minkowski' and `p` parameter set to 2.
+
+    effective_metric_params_ : dict
+        Additional keyword arguments for the metric function. For most metrics
+        will be same with `metric_params` parameter, but may also contain the
+        `p` parameter value if the `effective_metric_` attribute is set to
+        'minkowski'.
+
+    n_features_in_ : int
+        Number of features seen during :term:`fit`.
+
+        .. versionadded:: 0.24
+
+    feature_names_in_ : ndarray of shape (`n_features_in_`,)
+        Names of features seen during :term:`fit`. Defined only when `X`
+        has feature names that are all strings.
+
+        .. versionadded:: 1.0
+
+    n_samples_fit_ : int
+        Number of samples in the fitted data.
+
+    outputs_2d_ : bool
+        False when `y`'s shape is (n_samples, ) or (n_samples, 1) during fit
+        otherwise True.
+
+    feature_subsets_ : list of ndarray
+        The collection of feature indices for each base estimator.
+
+    n_features_per_subset_ : int
+        The number of features used in each subset.
+
+    See Also
+    --------
+    KNeighborsClassifier : Classifier implementing the k-nearest neighbors vote.
+    RadiusNeighborsClassifier : Classifier based on neighbors within a fixed radius.
+
+    Notes
+    -----
+    Random k-NN is particularly effective for high-dimensional datasets where
+    many features are noisy or irrelevant. By constructing multiple k-NN models
+    on random feature subsets and aggregating their predictions, the method
+    reduces overfitting and improves generalization.
+
+    The computational complexity for prediction is O(n_estimators * n * d_subset * k),
+    where n is the number of training samples, d_subset is the number of features
+    per subset, and k is the number of neighbors.
+
+    References
+    ----------
+    .. [1] Li, J., Dong, W., & Meng, D. (2017). "Grouped random k nearest neighbor
+           for high dimensional classification." Pattern Recognition Letters.
+
+    Examples
+    --------
+    >>> from sklearn.datasets import make_classification
+    >>> from sklearn.neighbors import RandomKNeighborsClassifier
+    >>> X, y = make_classification(n_samples=100, n_features=50, n_informative=20,
+    ...                           random_state=42)
+    >>> clf = RandomKNeighborsClassifier(n_estimators=50, n_neighbors=5,
+    ...                                  random_state=42)
+    >>> clf.fit(X, y)
+    RandomKNeighborsClassifier(...)
+    >>> clf.predict(X[:3])
+    array([...])
+    >>> clf.predict_proba(X[:3])
+    array([[...]])
+    """
+
+    _parameter_constraints: dict = {
+        **NeighborsBase._parameter_constraints,
+        "n_estimators": [Interval(Integral, 1, None, closed="left")],
+        "n_features_per_subset": [
+            Interval(Integral, 1, None, closed="left"),
+            None,
+        ],
+        "weights": [StrOptions({"uniform", "distance"}), callable, None],
+        "ensemble_voting": [StrOptions({"hard", "soft"})],
+        "random_state": ["random_state"],
+    }
+    _parameter_constraints.pop("radius")
+
+    def __init__(
+        self,
+        n_estimators=100,
+        *,
+        n_neighbors=5,
+        n_features_per_subset=None,
+        weights="uniform",
+        ensemble_voting="hard",
+        algorithm="auto",
+        leaf_size=30,
+        p=2,
+        metric="minkowski",
+        metric_params=None,
+        n_jobs=None,
+        random_state=None,
+    ):
+        super().__init__(
+            n_neighbors=n_neighbors,
+            algorithm=algorithm,
+            leaf_size=leaf_size,
+            metric=metric,
+            p=p,
+            metric_params=metric_params,
+            n_jobs=n_jobs,
+        )
+        self.n_estimators = n_estimators
+        self.n_features_per_subset = n_features_per_subset
+        self.weights = weights
+        self.ensemble_voting = ensemble_voting
+        self.random_state = random_state
+
+    @_fit_context(
+        # RandomKNeighborsClassifier.metric is not validated yet
+        prefer_skip_nested_validation=False
+    )
+    def fit(self, X, y):
+        """Fit the random k-nearest neighbors classifier from the training dataset.
+
+        Parameters
+        ----------
+        X : {array-like, sparse matrix} of shape (n_samples, n_features)
+            Training data.
+
+        y : {array-like, sparse matrix} of shape (n_samples,) or \
+                (n_samples, n_outputs)
+            Target values.
+
+        Returns
+        -------
+        self : RandomKNeighborsClassifier
+            The fitted random k-nearest neighbors classifier.
+        """
+        # Fit the base NeighborsBase
+        self._fit(X, y)
+
+        # Determine n_features_per_subset
+        if self.n_features_per_subset is None:
+            self.n_features_per_subset_ = max(1, int(np.sqrt(self.n_features_in_)))
+        else:
+            self.n_features_per_subset_ = min(
+                self.n_features_per_subset, self.n_features_in_
+            )
+
+        # Generate random feature subsets
+        from sklearn.utils.validation import check_random_state
+
+        random_state = check_random_state(self.random_state)
+        self.feature_subsets_ = []
+        for _ in range(self.n_estimators):
+            subset = random_state.choice(
+                self.n_features_in_,
+                size=self.n_features_per_subset_,
+                replace=False,
+            )
+            self.feature_subsets_.append(np.sort(subset))
+
+        return self
+
+    def predict(self, X):
+        """Predict the class labels for the provided data.
+
+        Parameters
+        ----------
+        X : {array-like, sparse matrix} of shape (n_queries, n_features)
+            Test samples.
+
+        Returns
+        -------
+        y : ndarray of shape (n_queries,) or (n_queries, n_outputs)
+            Class labels for each data sample.
+        """
+        check_is_fitted(self, ["feature_subsets_", "n_features_per_subset_"])
+
+        if self.ensemble_voting == "soft":
+            # Use predict_proba for soft voting
+            probas = self.predict_proba(X)
+            if self.outputs_2d_:
+                return np.stack(
+                    [
+                        self.classes_[idx][np.argmax(proba, axis=1)]
+                        for idx, proba in enumerate(probas)
+                    ],
+                    axis=1,
+                )
+            return self.classes_[np.argmax(probas, axis=1)]
+
+        # Hard voting
+        X = validate_data(self, X, accept_sparse="csr", reset=False)
+        n_queries = _num_samples(X)
+
+        classes_ = self.classes_
+        _y = self._y
+        if not self.outputs_2d_:
+            _y = self._y.reshape((-1, 1))
+            classes_ = [self.classes_]
+
+        n_outputs = len(classes_)
+        y_pred = np.empty((n_queries, n_outputs), dtype=classes_[0].dtype)
+
+        # Collect predictions from all estimators
+        all_predictions = []
+        for feature_subset in self.feature_subsets_:
+            X_subset = X[:, feature_subset]
+            X_train_subset = self._fit_X[:, feature_subset]
+
+            # Create temporary neighbor searcher for this subset
+            from sklearn.neighbors import NearestNeighbors
+
+            nbrs = NearestNeighbors(
+                n_neighbors=self.n_neighbors,
+                algorithm=self.algorithm,
+                leaf_size=self.leaf_size,
+                metric=self.metric,
+                p=self.p,
+                metric_params=self.metric_params,
+                n_jobs=self.n_jobs,
+            )
+            nbrs.fit(X_train_subset)
+
+            if self.weights == "uniform":
+                neigh_ind = nbrs.kneighbors(X_subset, return_distance=False)
+                neigh_dist = None
+            else:
+                neigh_dist, neigh_ind = nbrs.kneighbors(X_subset)
+
+            all_predictions.append((neigh_ind, neigh_dist))
+
+        # Aggregate predictions across estimators
+        for k, classes_k in enumerate(classes_):
+            # Collect all neighbor labels from all estimators
+            all_votes = []
+            all_weights = []
+
+            for neigh_ind, neigh_dist in all_predictions:
+                votes = _y[neigh_ind, k]
+                all_votes.append(votes)
+
+                if neigh_dist is not None:
+                    weights = _get_weights(neigh_dist, self.weights)
+                    all_weights.append(weights)
+
+            # Combine votes from all estimators
+            combined_votes = np.concatenate(all_votes, axis=1)
+
+            if len(all_weights) > 0:
+                combined_weights = np.concatenate(all_weights, axis=1)
+                mode, _ = weighted_mode(combined_votes, combined_weights, axis=1)
+            else:
+                mode, _ = _mode(combined_votes, axis=1)
+
+            mode = np.asarray(mode.ravel(), dtype=np.intp)
+            y_pred[:, k] = classes_k.take(mode)
+
+        if not self.outputs_2d_:
+            y_pred = y_pred.ravel()
+
+        return y_pred
+
+    def predict_proba(self, X):
+        """Return probability estimates for the test data X.
+
+        Parameters
+        ----------
+        X : {array-like, sparse matrix} of shape (n_queries, n_features)
+            Test samples.
+
+        Returns
+        -------
+        p : ndarray of shape (n_queries, n_classes), or a list of n_outputs \
+                of such arrays if n_outputs > 1.
+            The class probabilities of the input samples. Classes are ordered
+            by lexicographic order.
+        """
+        check_is_fitted(self, ["feature_subsets_", "n_features_per_subset_"])
+
+        X = validate_data(self, X, accept_sparse="csr", reset=False)
+        n_queries = _num_samples(X)
+
+        classes_ = self.classes_
+        _y = self._y
+        if not self.outputs_2d_:
+            _y = self._y.reshape((-1, 1))
+            classes_ = [self.classes_]
+
+        # Collect predictions from all estimators
+        all_predictions = []
+        for feature_subset in self.feature_subsets_:
+            X_subset = X[:, feature_subset]
+            X_train_subset = self._fit_X[:, feature_subset]
+
+            # Create temporary neighbor searcher for this subset
+            from sklearn.neighbors import NearestNeighbors
+
+            nbrs = NearestNeighbors(
+                n_neighbors=self.n_neighbors,
+                algorithm=self.algorithm,
+                leaf_size=self.leaf_size,
+                metric=self.metric,
+                p=self.p,
+                metric_params=self.metric_params,
+                n_jobs=self.n_jobs,
+            )
+            nbrs.fit(X_train_subset)
+
+            if self.weights == "uniform":
+                neigh_ind = nbrs.kneighbors(X_subset, return_distance=False)
+                neigh_dist = None
+            else:
+                neigh_dist, neigh_ind = nbrs.kneighbors(X_subset)
+
+            all_predictions.append((neigh_ind, neigh_dist))
+
+        # Aggregate probabilities across estimators
+        probabilities = []
+        for k, classes_k in enumerate(classes_):
+            proba_k = np.zeros((n_queries, classes_k.size))
+
+            # Accumulate probabilities from each estimator
+            for neigh_ind, neigh_dist in all_predictions:
+                pred_labels = _y[:, k][neigh_ind]
+
+                if neigh_dist is not None:
+                    weights = _get_weights(neigh_dist, self.weights)
+                else:
+                    weights = np.ones_like(neigh_ind, dtype=float)
+
+                all_rows = np.arange(n_queries)
+                # Accumulate weighted votes for this estimator
+                for i, idx in enumerate(pred_labels.T):  # loop is O(n_neighbors)
+                    proba_k[all_rows, idx] += weights[:, i]
+
+            # Normalize by total number of votes (n_estimators * n_neighbors)
+            normalizer = proba_k.sum(axis=1)[:, np.newaxis]
+            normalizer[normalizer == 0.0] = 1.0
+            proba_k /= normalizer
+
+            probabilities.append(proba_k)
+
+        if not self.outputs_2d_:
+            probabilities = probabilities[0]
+
+        return probabilities
+
+    def __sklearn_tags__(self):
+        tags = super().__sklearn_tags__()
+        tags.classifier_tags.multi_label = True
+        return tags
